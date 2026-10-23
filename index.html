@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>骨伝導 集音アンプ</title>
+<style>
+body{font-family:sans-serif;margin:0;padding:16px;max-width:520px;margin-inline:auto;background:#111;color:#eee}
+h1{font-size:20px}
+button{width:100%;padding:18px;font-size:18px;border:0;border-radius:12px;margin:8px 0}
+#start{background:#2e7d32;color:#fff}
+#stop{background:#b71c1c;color:#fff}
+label{display:block;margin-top:18px;font-size:15px}
+input{width:100%}
+.status{min-height:24px;color:#9ccc65}
+.warn{color:#ffab91;font-size:14px}
+</style>
+</head>
+<body>
+<h1>骨伝導 集音アンプ</h1>
+<div class="status" id="status"></div>
+<button id="start">マイク開始</button>
+<button id="stop">停止</button>
+
+<label>音量: <span id="gainValue">1.00</span>倍</label>
+<input id="gain" type="range" min="0" max="4" step="0.05" value="1">
+
+<label>低音カット: <span id="lowValue">150</span>Hz</label>
+<input id="lowcut" type="range" min="0" max="500" step="10" value="150">
+
+<label>声の聞き取り強調: <span id="voiceValue">4</span>dB</label>
+<input id="voice" type="range" min="-6" max="12" step="1" value="4">
+
+<p class="warn">
+※ 最初は音量1倍以下で試してください。<br>
+※ ハウリングしたら音量を下げ、マイクを骨伝導から離してください。<br>
+※ 配達中・走行中・道路付近では使用しないでください。
+</p>
+
+<script>
+const $=id=>document.getElementById(id);
+let ctx,stream,src,hp,peaking,highshelf,comp,gain,running=false;
+
+$("start").onclick=async()=>{
+if(running)return;
+if(!navigator.mediaDevices?.getUserMedia){
+$("status").textContent="この環境ではマイクにアクセスできません。HTTPSで開いてください。";
+return;
+}
+try{
+stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+ctx=new AudioContext();
+await ctx.resume();
+src=ctx.createMediaStreamSource(stream);
+
+hp=ctx.createBiquadFilter();
+hp.type="highpass";
+hp.frequency.value=Number($("lowcut").value);
+
+peaking=ctx.createBiquadFilter();
+peaking.type="peaking";
+peaking.frequency.value=1800;
+peaking.Q.value=1;
+peaking.gain.value=Number($("voice").value);
+
+highshelf=ctx.createBiquadFilter();
+highshelf.type="highshelf";
+highshelf.frequency.value=3200;
+highshelf.gain.value=2;
+
+comp=ctx.createDynamicsCompressor();
+comp.threshold.value=-28;
+comp.knee.value=20;
+comp.ratio.value=4;
+comp.attack.value=0.005;
+comp.release.value=0.15;
+
+gain=ctx.createGain();
+gain.gain.value=Number($("gain").value);
+
+src.connect(hp).connect(peaking).connect(highshelf).connect(comp).connect(gain).connect(ctx.destination);
+running=true;
+$("status").textContent="集音中。Bluetooth骨伝導が出力先になっているか確認してください。";
+}catch(err){
+$("status").textContent="マイク取得エラー: "+err.message;
+}
+};
+
+$("stop").onclick=()=>{
+if(!running)return;
+src?.disconnect();
+stream?.getTracks().forEach(t=>t.stop());
+ctx?.close();
+running=false;
+$("status").textContent="停止しました。";
+};
+
+$("gain").oninput=e=>{
+const v=Number(e.target.value);
+$("gainValue").textContent=v.toFixed(2);
+if(gain)gain.gain.value=v;
+};
+
+$("lowcut").oninput=e=>{
+$("lowValue").textContent=e.target.value;
+if(hp)hp.frequency.value=Number(e.target.value);
+};
+
+$("voice").oninput=e=>{
+$("voiceValue").textContent=e.target.value;
+if(peaking)peaking.gain.value=Number(e.target.value);
+};
+</script>
+</body>
+</html>
