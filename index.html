@@ -2,114 +2,364 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>骨伝導 集音アンプ</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>骨伝導 集音アンプ・マイク選択版</title>
 <style>
-body{font-family:sans-serif;margin:0;padding:16px;max-width:520px;margin-inline:auto;background:#111;color:#eee}
-h1{font-size:20px}
-button{width:100%;padding:18px;font-size:18px;border:0;border-radius:12px;margin:8px 0}
-#start{background:#2e7d32;color:#fff}
-#stop{background:#b71c1c;color:#fff}
-label{display:block;margin-top:18px;font-size:15px}
-input{width:100%}
-.status{min-height:24px;color:#9ccc65}
-.warn{color:#ffab91;font-size:14px}
+*{box-sizing:border-box}
+body{
+  font-family:system-ui,sans-serif;background:#111;color:#eee;
+  max-width:560px;margin:auto;padding:18px;line-height:1.6
+}
+h1{font-size:21px}
+label{display:block;margin-top:20px}
+button,select{
+  width:100%;padding:15px;margin-top:10px;
+  border:0;border-radius:10px;font-size:16px
+}
+button{color:white;background:#345}
+button:disabled{opacity:.45}
+#start{background:#287d35}
+#stop{background:#b51e24}
+select{background:#eee;color:#111}
+input[type=range]{width:100%}
+.box{
+  background:#222;border-radius:10px;padding:12px;
+  margin-top:15px;white-space:pre-wrap;overflow-wrap:anywhere
+}
+.note{font-size:14px;color:#ffbf92}
+small{color:#bbb}
 </style>
 </head>
 <body>
-<h1>骨伝導 集音アンプ</h1>
-<div class="status" id="status"></div>
-<button id="start">マイク開始</button>
-<button id="stop">停止</button>
+<h1>骨伝導 集音アンプ<br>マイク選択版</h1>
 
-<label>音量: <span id="gainValue">1.00</span>倍</label>
-<input id="gain" type="range" min="0" max="4" step="0.05" value="1">
-
-<label>低音カット: <span id="lowValue">150</span>Hz</label>
-<input id="lowcut" type="range" min="0" max="500" step="10" value="150">
-
-<label>声の聞き取り強調: <span id="voiceValue">4</span>dB</label>
-<input id="voice" type="range" min="-6" max="12" step="1" value="4">
-
-<p class="warn">
-※ 最初は音量1倍以下で試してください。<br>
-※ ハウリングしたら音量を下げ、マイクを骨伝導から離してください。<br>
-※ 配達中・走行中・道路付近では使用しないでください。
+<p class="note">
+Bluetooth骨伝導を先に接続してください。
+静かな室内で、スマホの音量を小さくして試してください。
 </p>
 
+<button id="scan">① マイクを調べる・一覧更新</button>
+
+<label for="mic">② 集音するマイクを選択</label>
+<select id="mic">
+  <option value="">自動選択（端末におまかせ）</option>
+</select>
+<small>
+「内蔵」「Built-in」「Phone」などがあれば候補です。
+「既定」「Default」だけでは、スマホ本体とは断定できません。
+</small>
+
+<button id="start">③ 選んだマイクで集音開始</button>
+<button id="stop">停止</button>
+
+<div id="status" class="box" role="status">
+停止中。まず「① マイクを調べる」を押してください。
+</div>
+<div id="info" class="box">使用中のマイク：なし</div>
+
+<label for="volume">
+増幅倍率：<span id="volumeText">0.20</span>倍
+</label>
+<input id="volume" type="range"
+       min="0" max="2" step="0.05" value="0.2">
+
+<label for="low">
+低音カット：<span id="lowText">150</span>Hz
+</label>
+<input id="low" type="range"
+       min="50" max="500" step="10" value="150">
+
+<label for="voice">
+声の帯域を強調：<span id="voiceText">0</span>dB
+</label>
+<input id="voice" type="range"
+       min="-6" max="8" step="1" value="0">
+
+<p class="note">
+・大きい音、キーンという音、痛みや違和感があればすぐ停止。<br>
+・スマホのスピーカーから出た場合も停止してください。<br>
+・画面を開いたままテストしてください。<br>
+・走行中は使用しないでください。<br>
+・補聴器ではありません。音量の安全性を保証する機能はありません。
+</p>
+<p><small>
+このコードには録音保存・音声アップロード処理はありません。
+</small></p>
+
 <script>
-const $=id=>document.getElementById(id);
-let ctx,stream,src,hp,peaking,highshelf,comp,gain,running=false;
+"use strict";
 
-$("start").onclick=async()=>{
-if(running)return;
-if(!navigator.mediaDevices?.getUserMedia){
-$("status").textContent="この環境ではマイクにアクセスできません。HTTPSで開いてください。";
-return;
+const $ = id => document.getElementById(id);
+
+let ctx = null;
+let stream = null;
+let source = null;
+let gain = null;
+let highpass = null;
+let voiceFilter = null;
+let busy = false;
+let generation = 0;
+
+function showStatus(text) {
+  $("status").textContent = text;
 }
-try{
-stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
-ctx=new AudioContext();
-await ctx.resume();
-src=ctx.createMediaStreamSource(stream);
 
-hp=ctx.createBiquadFilter();
-hp.type="highpass";
-hp.frequency.value=Number($("lowcut").value);
-
-peaking=ctx.createBiquadFilter();
-peaking.type="peaking";
-peaking.frequency.value=1800;
-peaking.Q.value=1;
-peaking.gain.value=Number($("voice").value);
-
-highshelf=ctx.createBiquadFilter();
-highshelf.type="highshelf";
-highshelf.frequency.value=3200;
-highshelf.gain.value=2;
-
-comp=ctx.createDynamicsCompressor();
-comp.threshold.value=-28;
-comp.knee.value=20;
-comp.ratio.value=4;
-comp.attack.value=0.005;
-comp.release.value=0.15;
-
-gain=ctx.createGain();
-gain.gain.value=Number($("gain").value);
-
-src.connect(hp).connect(peaking).connect(highshelf).connect(comp).connect(gain).connect(ctx.destination);
-running=true;
-$("status").textContent="集音中。Bluetooth骨伝導が出力先になっているか確認してください。";
-}catch(err){
-$("status").textContent="マイク取得エラー: "+err.message;
+function setBusy(value) {
+  busy = value;
+  $("scan").disabled = value;
+  $("start").disabled = value;
+  $("mic").disabled = value;
 }
+
+function checkSupport() {
+  if (!window.isSecureContext ||
+      !navigator.mediaDevices?.getUserMedia ||
+      !navigator.mediaDevices?.enumerateDevices) {
+    throw new Error(
+      "マイク機能が使えません。HTTPSの公開URLをChromeで開いてください。"
+    );
+  }
+}
+
+async function cleanup() {
+  const oldStream = stream;
+  const oldCtx = ctx;
+
+  stream = null;
+  ctx = null;
+  gain = null;
+  highpass = null;
+  voiceFilter = null;
+
+  if (source) {
+    try { source.disconnect(); } catch (_) {}
+    source = null;
+  }
+
+  oldStream?.getTracks().forEach(track => track.stop());
+
+  if (oldCtx && oldCtx.state !== "closed") {
+    try { await oldCtx.close(); } catch (_) {}
+  }
+
+  $("info").textContent = "使用中のマイク：なし";
+}
+
+async function refreshList() {
+  const previous = $("mic").value;
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const inputs = devices.filter(device => device.kind === "audioinput");
+
+  $("mic").replaceChildren(
+    new Option("自動選択（端末におまかせ）", "")
+  );
+
+  inputs.forEach((device, index) => {
+    $("mic").add(new Option(
+      device.label || `マイク ${index + 1}（名称不明）`,
+      device.deviceId
+    ));
+  });
+
+  if ([...$("mic").options].some(option => option.value === previous)) {
+    $("mic").value = previous;
+  }
+
+  return inputs;
+}
+
+function errorText(error) {
+  const messages = {
+    NotAllowedError:
+      "マイクが許可されていません。Chromeのサイト設定でマイクを許可してください。",
+    NotFoundError:
+      "利用できるマイクが見つかりません。",
+    NotReadableError:
+      "マイクを開始できません。他の通話・録音アプリを閉じて試してください。",
+    OverconstrainedError:
+      "選んだマイクを使用できません。一覧を更新して選び直してください。"
+  };
+  return messages[error.name] ||
+    `${error.name || "エラー"}：${error.message}`;
+}
+
+$("scan").onclick = async () => {
+  if (busy) return;
+
+  const ticket = ++generation;
+  setBusy(true);
+  let permissionStream = null;
+
+  try {
+    await cleanup();
+    checkSupport();
+    showStatus("マイクの許可・一覧を確認しています…");
+
+    permissionStream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: false
+    });
+
+    if (ticket !== generation) return;
+
+    const inputs = await refreshList();
+
+    showStatus(
+      `${inputs.length}件のマイク候補を取得しました。\n` +
+      "②でマイクを選び、③を押してください。\n" +
+      "内蔵マイクが出ない場合、このブラウザからは選べない可能性があります。"
+    );
+  } catch (error) {
+    if (ticket === generation) showStatus(errorText(error));
+  } finally {
+    permissionStream?.getTracks().forEach(track => track.stop());
+    setBusy(false);
+  }
 };
 
-$("stop").onclick=()=>{
-if(!running)return;
-src?.disconnect();
-stream?.getTracks().forEach(t=>t.stop());
-ctx?.close();
-running=false;
-$("status").textContent="停止しました。";
+$("start").onclick = async () => {
+  if (busy) return;
+
+  const ticket = ++generation;
+  const selectedId = $("mic").value;
+  const selectedName = $("mic").selectedOptions[0]?.textContent;
+  let acquiredStream = null;
+  let localCtx = null;
+
+  setBusy(true);
+
+  try {
+    checkSupport();
+
+    // ボタン操作の直後に音声処理を起動
+    localCtx = new AudioContext({latencyHint: "interactive"});
+    await localCtx.resume();
+
+    await cleanup();
+    if (ticket !== generation) return;
+
+    showStatus("選択したマイクを開始しています…");
+
+    const constraints = {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    };
+
+    if (selectedId) {
+      constraints.deviceId = {exact: selectedId};
+    }
+
+    acquiredStream = await navigator.mediaDevices.getUserMedia({
+      audio: constraints,
+      video: false
+    });
+
+    if (ticket !== generation) return;
+
+    ctx = localCtx;
+    stream = acquiredStream;
+
+    source = ctx.createMediaStreamSource(stream);
+
+    highpass = ctx.createBiquadFilter();
+    highpass.type = "highpass";
+    highpass.frequency.value = Number($("low").value);
+
+    voiceFilter = ctx.createBiquadFilter();
+    voiceFilter.type = "peaking";
+    voiceFilter.frequency.value = 1800;
+    voiceFilter.Q.value = 1;
+    voiceFilter.gain.value = Number($("voice").value);
+
+    gain = ctx.createGain();
+    gain.gain.value = Number($("volume").value);
+
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.value = -12;
+    compressor.knee.value = 6;
+    compressor.ratio.value = 12;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.2;
+
+    source.connect(highpass)
+      .connect(voiceFilter)
+      .connect(gain)
+      .connect(compressor)
+      .connect(ctx.destination);
+
+    const track = stream.getAudioTracks()[0];
+    const settings = track.getSettings();
+
+    $("info").textContent =
+      `選択：${selectedName}\n` +
+      `使用中：${track.label || "名称を取得できません"}\n` +
+      `機器ID：${settings.deviceId || "取得できません"}\n\n` +
+      "表示だけでなく、スマホの近くの音を拾うか実際に確認してください。";
+
+    showStatus(
+      "集音中。\n" +
+      "骨伝導から音が出ているか確認し、低音量から調整してください。"
+    );
+
+    track.onended = () => {
+      if (stream === acquiredStream) $("stop").click();
+    };
+  } catch (error) {
+    if (ticket === generation) {
+      await cleanup();
+      showStatus(errorText(error));
+    }
+  } finally {
+    if (stream !== acquiredStream) {
+      acquiredStream?.getTracks().forEach(track => track.stop());
+    }
+    if (ctx !== localCtx && localCtx?.state !== "closed") {
+      try { await localCtx?.close(); } catch (_) {}
+    }
+    setBusy(false);
+  }
 };
 
-$("gain").oninput=e=>{
-const v=Number(e.target.value);
-$("gainValue").textContent=v.toFixed(2);
-if(gain)gain.gain.value=v;
+$("stop").onclick = async () => {
+  ++generation;
+  await cleanup();
+  showStatus("停止しました。");
 };
 
-$("lowcut").oninput=e=>{
-$("lowValue").textContent=e.target.value;
-if(hp)hp.frequency.value=Number(e.target.value);
+$("mic").onchange = async () => {
+  if (stream) {
+    ++generation;
+    await cleanup();
+    showStatus("マイクを変更しました。③を押すと新しいマイクで開始します。");
+  }
 };
 
-$("voice").oninput=e=>{
-$("voiceValue").textContent=e.target.value;
-if(peaking)peaking.gain.value=Number(e.target.value);
+$("volume").oninput = () => {
+  const value = Number($("volume").value);
+  $("volumeText").textContent = value.toFixed(2);
+  if (gain && ctx) {
+    gain.gain.setTargetAtTime(value, ctx.currentTime, 0.03);
+  }
 };
+
+$("low").oninput = () => {
+  const value = Number($("low").value);
+  $("lowText").textContent = value;
+  if (highpass) highpass.frequency.value = value;
+};
+
+$("voice").oninput = () => {
+  const value = Number($("voice").value);
+  $("voiceText").textContent = value;
+  if (voiceFilter) voiceFilter.gain.value = value;
+};
+
+window.addEventListener("pagehide", () => {
+  ++generation;
+  stream?.getTracks().forEach(track => track.stop());
+  if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
+});
 </script>
 </body>
 </html>
